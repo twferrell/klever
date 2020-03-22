@@ -3,7 +3,7 @@ package com.linecorp.klever.handler
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import com.linecorp.clova.extension.client.*
+import com.linecorp.clova.extension.client.ClovaClient
 import com.linecorp.klever.model.User
 import com.linecorp.klever.model.dao.ClovaClientDao
 import com.linecorp.klever.model.dao.UserDao
@@ -17,7 +17,6 @@ import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.server.ServerRequest
 import org.springframework.web.reactive.function.server.ServerResponse
 import reactor.core.publisher.Mono
-import java.lang.IllegalArgumentException
 import java.net.URI
 import javax.script.ScriptException
 
@@ -85,17 +84,12 @@ class DefaultHandler {
             request.bodyToMono(String::class.java)
                     .flatMap { body ->
                         val clovaClient = objectMapper.readValue<com.linecorp.klever.model.ClovaClient>(body)
-                        if (clovaClient.clientId == com.linecorp.klever.model.ClovaClient.NOT_EXIST) {
-                            clovaClientDao.insertClovaClient(clovaClient)
-                        } else {
-                            clovaClientDao.updateClovaClient(clovaClient)
-                        }
                         val dsl = generateClientDsl(clovaClient.code)
                         lateinit var response: Map<String, Any>
                         try {
-                            val client = kleverRuntime.eval(dsl) as ClovaClient
-                            clients[clovaClient.clientId] = client
-                            response = mapOf("status" to 200, "clientId" to clovaClient.clientId)
+                            val user = kleverRuntime.getEngine().eval(dsl) as com.linecorp.klever.User
+
+                            response = mapOf("status" to 200, "user" to user)
                             return@flatMap ServerResponse.ok().body(BodyInserters.fromObject(response))
                         } catch (e: ScriptException) {
                             response = mapOf("status" to 400, "errorMessage" to (e.message ?: ""))
@@ -112,7 +106,7 @@ class DefaultHandler {
                         logger.info("rebuild the client code for id $clientId")
                         val clovaClient = clovaClientDao.getClovaClientByClientId(clientId)
                         clovaClient?.let {
-                            clients[clientId] = kleverRuntime.eval(generateClientDsl(clovaClient.code)) as ClovaClient
+                            clients[clientId] = kleverRuntime.getEngine().eval(generateClientDsl(clovaClient.code)) as ClovaClient
                         }
                     }
                     val client = clients[clientId]
@@ -128,36 +122,18 @@ class DefaultHandler {
     }
 
     private fun generateClientDsl(source: String): String =
-        """
-            import com.linecorp.clova.extension.client.*
-            import com.linecorp.clova.extension.model.util.*
-            import com.linecorp.clova.extension.converter.jackson.JacksonObjectMapper
-            import com.linecorp.klever.runtime.dsl.*
+            """
+            import com.linecorp.klever.User
 
             $source
         """
+
     private fun getDefaultDsl(): String = DEFAULT_DSL.trimMargin()
 
     companion object {
         private const val DEFAULT_DSL = """
-        |klever("the.clova.extension.id") {
-        |
-        |  launchHandler { _, _ ->
-        |    simpleResponse(message = "はい、エクステンションが起動しました")
-        |  }
-
-        |  intentHandler { request, session ->
-        |    val value = request.intent.slots["number"]?.value
-        |    simpleResponseWithReprompt(
-        |    message = "数字は""" + "$" + """{value}です",
-        |      repromptMessage = "もう一度話しますか"
-        |    )
-        |  }
-
-        |  sessionEndedHandler { _, _ ->
-        |    simpleResponse(message = "またね")
-        |  }
-        |}
+        |val randomAge = (18..80).shuffled().first()
+        |User("Thomas", randomAge)
         """
     }
 }
